@@ -1,4 +1,4 @@
-package fractaltreeindex
+package fti
 
 type node struct {
 	Hash  uint64
