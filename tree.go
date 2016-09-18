@@ -3,6 +3,7 @@ package fti
 import (
 	"errors"
 	"github.com/OneOfOne/xxhash/native"
+	"log"
 	"math"
 	"sync"
 )
@@ -66,6 +67,18 @@ func (t *Tree) Get(key string) ([]byte, error) {
 	return nil, nil
 }
 
+func (t *Tree) Print() {
+	for i := 0; i < 16; i++ {
+		t.arrayLock[i].Lock()
+		for _, node := range t.memoryArrays[i].nodes {
+			if node != nil {
+				log.Println(node)
+			}
+		}
+		t.arrayLock[i].Unlock()
+	}
+}
+
 func (t *Tree) mergeArrays() {
 	for {
 		for i := 0; i < 16; i++ {
@@ -74,8 +87,8 @@ func (t *Tree) mergeArrays() {
 				if t.memoryArrays[i].nodes[0] != nil {
 					ind1, ind2 := 0, 0
 					t.arrayLock[i+1].Lock()
-					for j := 0; ind1 < len(t.memoryArrays[i].nodes) && ind2 < len(t.memoryTmpArrays[i].nodes); j++ {
-						if t.memoryArrays[i].nodes[ind1].Hash < t.memoryTmpArrays[i].nodes[ind2].Hash {
+					for j := 0; ind1 < len(t.memoryArrays[i].nodes) || ind2 < len(t.memoryTmpArrays[i].nodes); j++ {
+						if ind1 < len(t.memoryArrays[i].nodes) && t.memoryArrays[i].nodes[ind1].Hash < t.memoryTmpArrays[i].nodes[ind2].Hash {
 							t.memoryTmpArrays[i+1].nodes[j] = t.memoryArrays[i].nodes[ind1]
 							t.memoryArrays[i].nodes[ind1] = nil
 							ind1++
@@ -84,6 +97,7 @@ func (t *Tree) mergeArrays() {
 							t.memoryTmpArrays[i].nodes[ind2] = nil
 							ind2++
 						}
+
 						if j == 0 {
 							t.memoryTmpArrays[i+1].startHash = t.memoryTmpArrays[i+1].nodes[0].Hash
 						} else if ind1 == len(t.memoryArrays[i].nodes) && ind2 == len(t.memoryTmpArrays[i].nodes) {
@@ -97,7 +111,6 @@ func (t *Tree) mergeArrays() {
 					for j, node := range t.memoryTmpArrays[i].nodes {
 						t.memoryArrays[i].nodes[j] = node
 						t.memoryTmpArrays[i].nodes[j] = nil
-
 					}
 				}
 			}

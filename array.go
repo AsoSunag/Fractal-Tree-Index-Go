@@ -10,15 +10,18 @@ func (a *array) findHash(hash uint64) ([]byte, bool) {
 	if hash >= a.startHash && hash <= a.endHash {
 		pivot := len(a.nodes) / 2
 		for {
-			if a.nodes[pivot].Hash < hash {
+			if a.nodes[pivot].Hash > hash {
 				pivot = pivot / 2
-			} else if a.nodes[pivot].Hash > hash {
+			} else if a.nodes[pivot].Hash < hash {
 				pivot = pivot + pivot/2
 			} else {
 				return a.nodes[pivot].Value, true
 			}
 
 			if a.nodes[pivot].Hash == a.startHash || a.nodes[pivot].Hash == a.endHash {
+				if a.nodes[pivot].Hash == hash {
+					return a.nodes[pivot].Value, true
+				}
 				return nil, false
 			}
 
