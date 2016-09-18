@@ -56,10 +56,12 @@ func (t *Tree) Get(key string) ([]byte, error) {
 	hash := xxhash.ChecksumString64(key)
 	for i := 0; i < 16; i++ {
 		t.arrayLock[i].Lock()
-		if val, found := t.memoryArrays[i].findHash(hash); found {
+		val, found := t.memoryArrays[i].findHash(hash)
+		t.arrayLock[i].Unlock()
+		if found {
 			return val, nil
 		}
-		t.arrayLock[i].Unlock()
+
 	}
 	return nil, nil
 }
