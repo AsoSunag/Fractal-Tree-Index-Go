@@ -10,15 +10,17 @@ import (
 type Tree struct {
 	memoryArrays    []*array
 	memoryTmpArrays []*array
-	arrayLock       []sync.Mutex
+	arrayLock       []*sync.Mutex
+	initMemArrayLen uint64
 }
 
-func (t *Tree) Init() {
-	// For now no config is provided so settings are hardcoded
-	t.memoryArrays = make([]*array, 16)
-	t.memoryTmpArrays = make([]*array, 16)
-	t.arrayLock = make([]sync.Mutex, 16)
-	for i := 0; i < 16; i++ {
+func (t *Tree) Init(initMemArrayLen uint64) {
+	t.initMemArrayLen = initMemArrayLen
+	t.memoryArrays = make([]*array, t.initMemArrayLen)
+	t.memoryTmpArrays = make([]*array, t.initMemArrayLen)
+	t.arrayLock = make([]*sync.Mutex, t.initMemArrayLen)
+	var i uint64
+	for i = 0; i < initMemArrayLen; i++ {
 		t.memoryArrays[i] = &array{
 			startHash: 0,
 			endHash:   0,
@@ -30,8 +32,14 @@ func (t *Tree) Init() {
 			endHash:   0,
 			nodes:     make([]*node, (int)(math.Pow(2, float64(i)))),
 		}
+		t.arrayLock[i] = &sync.Mutex{}
 	}
-	go t.mergeArrays()
+
+	go func() {
+		for {
+			t.mergeMemoryArrays(t.initMemArrayLen-1, 0)
+		}
+	}()
 }
 
 func (t *Tree) Insert(key string, value []byte) *Error {
@@ -41,7 +49,6 @@ func (t *Tree) Insert(key string, value []byte) *Error {
 		Value: value,
 	}
 	t.arrayLock[0].Lock()
-	defer t.arrayLock[0].Unlock()
 	if t.memoryTmpArrays[0].nodes[0] != nil {
 		return &Error{
 			description: "Cannot insert",
@@ -51,13 +58,17 @@ func (t *Tree) Insert(key string, value []byte) *Error {
 	t.memoryTmpArrays[0].startHash = n.Hash
 	t.memoryTmpArrays[0].endHash = n.Hash
 	t.memoryTmpArrays[0].nodes[0] = n
+	t.arrayLock[0].Unlock()
+	if needGrowth := t.mergeMemoryArrays(0, t.initMemArrayLen); needGrowth {
+		t.growMemoryArrays()
+	}
 
 	return nil
 }
 
 func (t *Tree) Get(key string) ([]byte, *Error) {
 	hash := xxhash.ChecksumString64(key)
-	for i := 0; i < 16; i++ {
+	for i := 0; i < len(t.memoryArrays); i++ {
 		t.arrayLock[i].Lock()
 		val, found := t.memoryArrays[i].findHash(hash)
 		t.arrayLock[i].Unlock()
@@ -70,7 +81,7 @@ func (t *Tree) Get(key string) ([]byte, *Error) {
 }
 
 func (t *Tree) Print() {
-	for i := 0; i < 16; i++ {
+	for i := 0; i < len(t.memoryArrays); i++ {
 		t.arrayLock[i].Lock()
 		for _, node := range t.memoryArrays[i].nodes {
 			if node != nil {
@@ -81,42 +92,74 @@ func (t *Tree) Print() {
 	}
 }
 
-func (t *Tree) mergeArrays() {
-	for {
-		for i := 0; i < 16; i++ {
-			t.arrayLock[i].Lock()
-			if t.memoryTmpArrays[i].nodes[0] != nil {
-				if t.memoryArrays[i].nodes[0] != nil {
-					ind1, ind2 := 0, 0
-					t.arrayLock[i+1].Lock()
-					for j := 0; ind1 < len(t.memoryArrays[i].nodes) || ind2 < len(t.memoryTmpArrays[i].nodes); j++ {
-						if ind1 < len(t.memoryArrays[i].nodes) && t.memoryArrays[i].nodes[ind1].Hash < t.memoryTmpArrays[i].nodes[ind2].Hash {
-							t.memoryTmpArrays[i+1].nodes[j] = t.memoryArrays[i].nodes[ind1]
-							t.memoryArrays[i].nodes[ind1] = nil
-							ind1++
-						} else {
-							t.memoryTmpArrays[i+1].nodes[j] = t.memoryTmpArrays[i].nodes[ind2]
-							t.memoryTmpArrays[i].nodes[ind2] = nil
-							ind2++
-						}
-
-						if j == 0 {
-							t.memoryTmpArrays[i+1].startHash = t.memoryTmpArrays[i+1].nodes[0].Hash
-						} else if ind1 == len(t.memoryArrays[i].nodes) && ind2 == len(t.memoryTmpArrays[i].nodes) {
-							t.memoryTmpArrays[i+1].endHash = t.memoryTmpArrays[i+1].nodes[j].Hash
-						}
+func (t *Tree) mergeMemoryArrays(startDepth, endDepth uint64) bool {
+	currLen := uint64(len(t.memoryTmpArrays))
+	if currLen-1 <= startDepth {
+		return false
+	} else if endDepth <= startDepth {
+		endDepth = currLen - 1
+	}
+	counter := 0
+	for i := startDepth; i < endDepth; i++ {
+		t.arrayLock[i].Lock()
+		if t.memoryTmpArrays[i].nodes[0] != nil {
+			if t.memoryArrays[i].nodes[0] != nil {
+				ind1, ind2 := 0, 0
+				t.arrayLock[i+1].Lock()
+				for j := 0; ind1 < len(t.memoryArrays[i].nodes) || ind2 < len(t.memoryTmpArrays[i].nodes); j++ {
+					if ind1 < len(t.memoryArrays[i].nodes) && t.memoryArrays[i].nodes[ind1].Hash < t.memoryTmpArrays[i].nodes[ind2].Hash {
+						t.memoryTmpArrays[i+1].nodes[j] = t.memoryArrays[i].nodes[ind1]
+						t.memoryArrays[i].nodes[ind1] = nil
+						ind1++
+					} else {
+						t.memoryTmpArrays[i+1].nodes[j] = t.memoryTmpArrays[i].nodes[ind2]
+						t.memoryTmpArrays[i].nodes[ind2] = nil
+						ind2++
 					}
-					t.arrayLock[i+1].Unlock()
-				} else {
-					t.memoryArrays[i].startHash = t.memoryTmpArrays[i].startHash
-					t.memoryArrays[i].endHash = t.memoryTmpArrays[i].endHash
-					for j, node := range t.memoryTmpArrays[i].nodes {
-						t.memoryArrays[i].nodes[j] = node
-						t.memoryTmpArrays[i].nodes[j] = nil
+
+					if j == 0 {
+						t.memoryTmpArrays[i+1].startHash = t.memoryTmpArrays[i+1].nodes[0].Hash
+					} else if ind1 == len(t.memoryArrays[i].nodes) && ind2 == len(t.memoryTmpArrays[i].nodes) {
+						t.memoryTmpArrays[i+1].endHash = t.memoryTmpArrays[i+1].nodes[j].Hash
 					}
 				}
+				t.arrayLock[i+1].Unlock()
+			} else {
+				t.memoryArrays[i].startHash = t.memoryTmpArrays[i].startHash
+				t.memoryArrays[i].endHash = t.memoryTmpArrays[i].endHash
+				for j, node := range t.memoryTmpArrays[i].nodes {
+					t.memoryArrays[i].nodes[j] = node
+					t.memoryTmpArrays[i].nodes[j] = nil
+				}
 			}
-			t.arrayLock[i].Unlock()
 		}
+
+		if t.memoryArrays[i].nodes[0] != nil {
+			counter++
+		}
+		t.arrayLock[i].Unlock()
 	}
+	if counter > len(t.memoryArrays)-1 {
+		return true
+	}
+	return false
+}
+
+func (t *Tree) growMemoryArrays() {
+	currLen := len(t.memoryArrays)
+	t.memoryArrays = append(t.memoryArrays, &array{
+		startHash: 0,
+		endHash:   0,
+		nodes:     make([]*node, (int)(math.Pow(2, float64(currLen)))),
+	})
+
+	t.memoryTmpArrays = append(t.memoryTmpArrays, &array{
+		startHash: 0,
+		endHash:   0,
+		nodes:     make([]*node, (int)(math.Pow(2, float64(currLen)))),
+	})
+
+	var mut sync.Mutex
+	t.arrayLock = append(t.arrayLock, &mut)
+
 }
