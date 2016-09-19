@@ -1,7 +1,6 @@
 package fti
 
 import (
-	"errors"
 	"github.com/OneOfOne/xxhash/native"
 	"log"
 	"math"
@@ -35,7 +34,7 @@ func (t *Tree) Init() {
 	go t.mergeArrays()
 }
 
-func (t *Tree) Insert(key string, value []byte) error {
+func (t *Tree) Insert(key string, value []byte) *Error {
 	n := &node{
 		Hash:  xxhash.ChecksumString64(key),
 		Key:   key,
@@ -44,7 +43,10 @@ func (t *Tree) Insert(key string, value []byte) error {
 	t.arrayLock[0].Lock()
 	defer t.arrayLock[0].Unlock()
 	if t.memoryTmpArrays[0].nodes[0] != nil {
-		return errors.New("Cannot insert temporary error")
+		return &Error{
+			description: "Cannot insert",
+			isTemporary: true,
+		}
 	}
 	t.memoryTmpArrays[0].startHash = n.Hash
 	t.memoryTmpArrays[0].endHash = n.Hash
@@ -53,7 +55,7 @@ func (t *Tree) Insert(key string, value []byte) error {
 	return nil
 }
 
-func (t *Tree) Get(key string) ([]byte, error) {
+func (t *Tree) Get(key string) ([]byte, *Error) {
 	hash := xxhash.ChecksumString64(key)
 	for i := 0; i < 16; i++ {
 		t.arrayLock[i].Lock()
