@@ -1,10 +1,11 @@
 package fti
 
 import (
-	"github.com/OneOfOne/xxhash/native"
 	"log"
 	"math"
 	"sync"
+
+	"github.com/OneOfOne/xxhash/native"
 )
 
 type Tree struct {
@@ -22,15 +23,17 @@ func (t *Tree) Init(initMemArrayLen uint64) {
 	var i uint64
 	for i = 0; i < initMemArrayLen; i++ {
 		t.memoryArrays[i] = &array{
-			startHash: 0,
-			endHash:   0,
-			nodes:     make([]*node, (int)(math.Pow(2, float64(i)))),
+			startHash:  0,
+			endHash:    0,
+			DirtyCount: 0,
+			nodes:      make([]*node, (int)(math.Pow(2, float64(i)))),
 		}
 
 		t.memoryTmpArrays[i] = &array{
-			startHash: 0,
-			endHash:   0,
-			nodes:     make([]*node, (int)(math.Pow(2, float64(i)))),
+			startHash:  0,
+			endHash:    0,
+			DirtyCount: 0,
+			nodes:      make([]*node, (int)(math.Pow(2, float64(i)))),
 		}
 		t.arrayLock[i] = &sync.Mutex{}
 	}
@@ -70,14 +73,30 @@ func (t *Tree) Get(key string) ([]byte, *Error) {
 	hash := xxhash.ChecksumString64(key)
 	for i := 0; i < len(t.memoryArrays); i++ {
 		t.arrayLock[i].Lock()
-		val, found := t.memoryArrays[i].findHash(hash)
-		t.arrayLock[i].Unlock()
-		if found {
-			return val, nil
+		if node, found := t.memoryArrays[i].findHash(hash); found {
+			retval := make([]byte, len(node.Value))
+			copy(retval, node.Value)
+			t.arrayLock[i].Unlock()
+			return retval, nil
 		}
-
+		t.arrayLock[i].Unlock()
 	}
 	return nil, nil
+}
+
+func (t *Tree) Delete(key string) *Error {
+	hash := xxhash.ChecksumString64(key)
+	for i := 0; i < len(t.memoryArrays); i++ {
+		t.arrayLock[i].Lock()
+		if node, found := t.memoryArrays[i].findHash(hash); found {
+			node.Dirty = true
+			t.memoryArrays[i].DirtyCount++
+			t.arrayLock[i].Unlock()
+			return nil
+		}
+		t.arrayLock[i].Unlock()
+	}
+	return nil
 }
 
 func (t *Tree) Print() {
@@ -123,10 +142,15 @@ func (t *Tree) mergeMemoryArrays(startDepth, endDepth uint64) bool {
 						t.memoryTmpArrays[i+1].endHash = t.memoryTmpArrays[i+1].nodes[j].Hash
 					}
 				}
+				t.memoryTmpArrays[i+1].DirtyCount = t.memoryTmpArrays[i].DirtyCount + t.memoryArrays[i].DirtyCount
+				t.memoryTmpArrays[i].DirtyCount = 0
+				t.memoryArrays[i].DirtyCount = 0
 				t.arrayLock[i+1].Unlock()
 			} else {
 				t.memoryArrays[i].startHash = t.memoryTmpArrays[i].startHash
 				t.memoryArrays[i].endHash = t.memoryTmpArrays[i].endHash
+				t.memoryArrays[i].DirtyCount = t.memoryTmpArrays[i].DirtyCount
+				t.memoryTmpArrays[i].DirtyCount = 0
 				for j, node := range t.memoryTmpArrays[i].nodes {
 					t.memoryArrays[i].nodes[j] = node
 					t.memoryTmpArrays[i].nodes[j] = nil
@@ -148,15 +172,17 @@ func (t *Tree) mergeMemoryArrays(startDepth, endDepth uint64) bool {
 func (t *Tree) growMemoryArrays() {
 	currLen := len(t.memoryArrays)
 	t.memoryArrays = append(t.memoryArrays, &array{
-		startHash: 0,
-		endHash:   0,
-		nodes:     make([]*node, (int)(math.Pow(2, float64(currLen)))),
+		startHash:  0,
+		endHash:    0,
+		DirtyCount: 0,
+		nodes:      make([]*node, (int)(math.Pow(2, float64(currLen)))),
 	})
 
 	t.memoryTmpArrays = append(t.memoryTmpArrays, &array{
-		startHash: 0,
-		endHash:   0,
-		nodes:     make([]*node, (int)(math.Pow(2, float64(currLen)))),
+		startHash:  0,
+		endHash:    0,
+		DirtyCount: 0,
+		nodes:      make([]*node, (int)(math.Pow(2, float64(currLen)))),
 	})
 
 	var mut sync.Mutex
